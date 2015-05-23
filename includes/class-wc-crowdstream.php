@@ -247,6 +247,8 @@ EOF;
 	});
 EOF;
 
+                update_post_meta( $orderNum, '_crowdstream_tracked', 1 );
+
 		return join("\n", $lines);
 	}
 
