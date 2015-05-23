@@ -145,8 +145,8 @@ EOF;
 
 		if ( 'yes' === $logged_in ) {
 			$userId       = get_current_user_id();
-			$current_user = get_user_by('id', $user_id);
-			$username     = $current_user->user_login;
+			$currentUser = get_user_by('id', $userId);
+			$username     = $currentUser->user_login;
 		} else {
 			$userId   = false;
 			$username = false;
@@ -187,11 +187,13 @@ EOF;
 
 				$data = array(
 					'order_id' => esc_js( $order->get_order_number() ),
-					'name' => esc_js( $item['name'] ),
+					'item' => esc_js( $item['name'] ),
+					'id' => esc_js( $_product->get_sku() ? $_product->get_sku() : $_product->id ),
 					'sku' => esc_js( $_product->get_sku() ? $_product->get_sku() : $_product->id ),
-					'variation' => esc_js( woocommerce_get_formatted_variation( $_product->variation_data, true ) ),
-					'price' => esc_js( $order->get_item_total( $item ) ),
-					'quantity' => esc_js( $item['qty'] )
+					'variant' => esc_js( woocommerce_get_formatted_variation( $_product->variation_data, true ) ),
+					'amount' => esc_js( $order->get_item_total( $item ) ),
+					'quantity' => esc_js( $item['qty'] ),
+					'currency' => esc_js( get_woocommerce_currency() )
 				);
 
 				$quantity += $item['qty'];
@@ -204,14 +206,14 @@ EOF;
 					}
 				}
 
-				$data['category'] = esc_js( join( "/", $out) );
+				// $data['category'] = esc_js( join( "/", $out) );
 
 				$items[] = $data;
 			}
 		}
 
 		if($items) {
-			$lines[] = 'crowdstream.events.add_items(';
+			$lines[] = 'crowdstream.events.addItems(';
 			$lines[] = json_encode($items);
 			$lines[] = ');';
 		}	
@@ -238,16 +240,14 @@ EOF;
 		$lines[] = <<<EOF
 	crowdstream.events.checkout({
 		'order_id': '$orderNum',
-		'affiliation': '$affiliation',
-		'revenue': '$revenue', 
+		'total': '$revenue', 
 		'shipping': '$shipping',
-		'tax': '$tax',
 		'currency': '$currency',
-		'items': $quantity
+		'items': '$quantity'
 	});
 EOF;
 
-		return join("\n", $lines);
+		return join("\n\n", $lines);
 	}
 
 	/**
@@ -282,11 +282,12 @@ EOF;
 
 		$parameters = array();
 		// Add single quotes to allow jQuery to be substituted into _trackEvent parameters
-		$parameters['category'] = "'" . __( 'Products', 'woocommerce-crowdstream' ) . "'";
-		$parameters['action']   = "'" . __( 'Add to Cart', 'woocommerce-crowdstream' ) . "'";
-		$parameters['label']    = "'" . esc_js( $product->get_sku() ? __( 'SKU:', 'woocommerce-crowdstream' ) . ' ' . $product->get_sku() : "#" . $product->id ) . "'";
+		// $parameters['category'] = "'" . __( 'Products', 'woocommerce-crowdstream' ) . "'";
+		// $parameters['action']   = "'" . __( 'Add to Cart', 'woocommerce-crowdstream' ) . "'";
+		$parameters['id']    = "'" . esc_js( $product->get_sku() ? __( 'SKU:', 'woocommerce-crowdstream' ) . ' ' . $product->get_sku() : "#" . $product->id ) . "'";
+		$parameters['sku']   = "'" . esc_js( $product->get_sku() ? __( 'SKU:', 'woocommerce-crowdstream' ) . ' ' . $product->get_sku() : "#" . $product->id ) . "'";
 
-		$this->event_tracking_code( $parameters, '.single_add_to_cart_button' );
+		$this->cart_event_tracking_code( $parameters, '.single_add_to_cart_button' );
 	}
 
 
@@ -303,11 +304,12 @@ EOF;
 
 		$parameters = array();
 		// Add single quotes to allow jQuery to be substituted into _trackEvent parameters
-		$parameters['category'] = "'" . __( 'Products', 'woocommerce-crowdstream' ) . "'";
-		$parameters['action']   = "'" . __( 'Add to Cart', 'woocommerce-crowdstream' ) . "'";
-		$parameters['label']    = "($(this).data('product_sku')) ? ('SKU: ' + $(this).data('product_sku')) : ('#' + $(this).data('product_id'))"; // Product SKU or ID
+		// $parameters['category'] = "'" . __( 'Products', 'woocommerce-crowdstream' ) . "'";
+		// $parameters['action']   = "'" . __( 'Add to Cart', 'woocommerce-crowdstream' ) . "'";
+		$parameters['id']    = "($(this).data('product_sku')) ? ('SKU: ' + $(this).data('product_sku')) : ($(this).data('product_id'))"; // Product SKU or ID
+		$parameters['sku']    = "($(this).data('product_sku')) ? ($(this).data('product_sku')) : ('#' + $(this).data('product_id'))"; // Product SKU or ID
 
-		$this->event_tracking_code( $parameters, '.add_to_cart_button:not(.product_type_variable, .product_type_grouped)' );
+		$this->cart_event_tracking_code( $parameters, '.add_to_cart_button:not(.product_type_variable, .product_type_grouped)' );
 	}
 
 	/**
@@ -318,7 +320,27 @@ EOF;
 	 *
 	 * @return void
 	 */
-	private function event_tracking_code( $parameters, $selector ) {
+	private function cart_event_tracking_code( $parameters, $selector ) {
+		$parameters = apply_filters( 'woocommerce_crowdstream_event_tracking_parameters', $parameters );
+
+		$track_event = "crowdstream.events.cart(%s);";
+
+		wc_enqueue_js( "
+	$( '" . $selector . "' ).click( function() {
+		" . sprintf( $track_event, json_encode($parameters) ) . "
+	});
+" );
+	}
+
+	/**
+	 * Crowdstream event tracking for loop add to cart
+	 *
+	 * @param array $parameters associative array of _trackEvent parameters
+	 * @param string $selector jQuery selector for binding click event
+	 *
+	 * @return void
+	 */
+	private function generic_event_tracking_code( $parameters, $selector ) {
 		$parameters = apply_filters( 'woocommerce_crowdstream_event_tracking_parameters', $parameters );
 
 		$track_event = "crowdstream.events.track(%s, %s, %s);";
