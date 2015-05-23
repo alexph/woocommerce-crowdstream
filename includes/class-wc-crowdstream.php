@@ -86,13 +86,14 @@ class WC_Crowdstream extends WC_Integration {
 		}
 	}
 
-	protected function get_tracking_template($appId, $userId, $username) {
+	protected function get_tracking_template($appId, $userId, $username, $email) {
 		global $wp;
 		$identityCode = '';
 		$ecommerceCode = '';
 
 		if($userId) {
-			$identityCode = 'crowdstream.events.identify("' . $userId . '", {username: "' . $username . '"});';
+			$identityCode = 'crowdstream.events.identify("' . $userId . '", {
+				username: "' . $username . '", email: "' . $email . '"});';
 		}
 
 		if(is_order_received_page()) {
@@ -144,17 +145,37 @@ EOF;
 		$logged_in = ( is_user_logged_in() ) ? 'yes' : 'no';
 
 		if ( 'yes' === $logged_in ) {
-			$userId       = get_current_user_id();
+			$userId      = get_current_user_id();
 			$currentUser = get_user_by('id', $userId);
-			$username     = $currentUser->user_login;
+			$username    = $currentUser->user_login;
+			$email       = $currentUser->user_email;
 		} else {
 			$userId   = false;
 			$username = false;
+			$email    = false;
 		}
+
+		wc_enqueue_js("
+
+var cs_variation_data = $('.variations_form').data('product_variations'),
+	cs_variation_current = '';
+$('[name=variation_id]').change(function() {
+	cs_variation_current = '';
+	var variation_id = $(this).val();
+	if(variation_id) {
+		$.each(cs_variation_data, function(idx, variation) {
+			if(variation) {
+				if(variation.variation_id == variation_id) {
+					cs_variation_current = variation;
+				}
+			}
+		});
+	}
+});");
 
 		return "
 <!-- WooCommerce Crowdstream Integration -->
-" . $this->get_tracking_template($this->crowdstream_app_id, $userId, $username) . "
+" . $this->get_tracking_template($this->crowdstream_app_id, $userId, $username, $email) . "
 <script type='text/javascript'>$code</script>
 
 <!-- /WooCommerce Crowdstream Integration -->
@@ -283,11 +304,10 @@ EOF;
 		global $product;
 
 		$parameters = array();
-		// Add single quotes to allow jQuery to be substituted into _trackEvent parameters
-		// $parameters['category'] = "'" . __( 'Products', 'woocommerce-crowdstream' ) . "'";
-		// $parameters['action']   = "'" . __( 'Add to Cart', 'woocommerce-crowdstream' ) . "'";
 		$parameters['id']    = "'" . esc_js( $product->get_sku() ? __( 'SKU:', 'woocommerce-crowdstream' ) . ' ' . $product->get_sku() : "#" . $product->id ) . "'";
 		$parameters['sku']   = "'" . esc_js( $product->get_sku() ? __( 'SKU:', 'woocommerce-crowdstream' ) . ' ' . $product->get_sku() : "#" . $product->id ) . "'";
+		$parameters['item']  = "'" . esc_js( $product->get_title() ) . "'";
+		$parameters['variant'] = "cs_variation_current";
 
 		$this->cart_event_tracking_code( $parameters, '.single_add_to_cart_button' );
 	}
@@ -308,8 +328,9 @@ EOF;
 		// Add single quotes to allow jQuery to be substituted into _trackEvent parameters
 		// $parameters['category'] = "'" . __( 'Products', 'woocommerce-crowdstream' ) . "'";
 		// $parameters['action']   = "'" . __( 'Add to Cart', 'woocommerce-crowdstream' ) . "'";
-		$parameters['id']    = "($(this).data('product_sku')) ? ('SKU: ' + $(this).data('product_sku')) : ($(this).data('product_id'))"; // Product SKU or ID
-		$parameters['sku']    = "($(this).data('product_sku')) ? ($(this).data('product_sku')) : ('#' + $(this).data('product_id'))"; // Product SKU or ID
+		$parameters['id']   = "($(this).data('product_sku')) ? ('SKU: ' + $(this).data('product_sku')) : ($(this).data('product_id'))"; // Product SKU or ID
+		$parameters['sku']  = "($(this).data('product_sku')) ? ($(this).data('product_sku')) : ('#' + $(this).data('product_id'))"; // Product SKU or ID
+		$parameters['item'] = "$('[itemprop=name]').text()";
 
 		$this->cart_event_tracking_code( $parameters, '.add_to_cart_button:not(.product_type_variable, .product_type_grouped)' );
 	}
@@ -327,9 +348,15 @@ EOF;
 
 		$track_event = "crowdstream.events.cart(%s);";
 
+		$js = array();
+
+		foreach($parameters as $name => $value) {
+			$js[] = "'" . $name . "': " . $value;
+		}
+
 		wc_enqueue_js( "
 	$( '" . $selector . "' ).click( function() {
-		" . sprintf( $track_event, json_encode($parameters) ) . "
+		" . sprintf( $track_event, "{" . join(', ', $js) . "}" ) . "
 	});
 " );
 	}
