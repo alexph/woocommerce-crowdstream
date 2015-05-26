@@ -35,7 +35,7 @@ class WC_Crowdstream extends WC_Integration {
 		add_action( 'woocommerce_update_options_integration_crowdstream_io', array( $this, 'process_admin_options') );
 
 		// Tracking code
-		add_action( 'wp_head', array( $this, 'tracking_code_display' ), 999999 );
+		add_action( 'wp_head', array( $this, 'tracking_code_display' ) );
 
 		// Event tracking code
 		add_action( 'woocommerce_after_add_to_cart_button', array( $this, 'add_to_cart' ) );
@@ -105,7 +105,7 @@ class WC_Crowdstream extends WC_Integration {
 		}
 
 		return <<<EOF
-<script>
+
     (function() {
         var crowdstream = window.crowdstream = window.crowdstream || {};
 
@@ -132,7 +132,8 @@ class WC_Crowdstream extends WC_Integration {
 
         crowdstream.load('$appId');
     })();
-</script>
+
+
 EOF;
 	}
 
@@ -155,29 +156,30 @@ EOF;
 			$email    = false;
 		}
 
-		wc_enqueue_js("
+// 		wc_enqueue_js("
 
-var cs_variation_data = $('.variations_form').data('product_variations'),
-	cs_variation_current = '';
-$('[name=variation_id]').change(function() {
-	cs_variation_current = '';
-	var variation_id = $(this).val();
-	if(variation_id) {
-		$.each(cs_variation_data, function(idx, variation) {
-			if(variation) {
-				if(variation.variation_id == variation_id) {
-					cs_variation_current = variation;
-				}
-			}
-		});
-	}
-});");
+// var cs_variation_data = $('.variations_form').data('product_variations'),
+// 	cs_variation_current = '';
+// $('[name=variation_id]').change(function() {
+// 	cs_variation_current = '';
+// 	var variation_id = $(this).val();
+// 	if(variation_id) {
+// 		$.each(cs_variation_data, function(idx, variation) {
+// 			if(variation) {
+// 				if(variation.variation_id == variation_id) {
+// 					cs_variation_current = variation;
+// 				}
+// 			}
+// 		});
+// 	}
+// });");
+// 
+// 		
+		$code = $this->get_tracking_template($this->crowdstream_app_id, $userId, $username, $email);
 
 		return "
 <!-- WooCommerce Crowdstream Integration -->
-" . $this->get_tracking_template($this->crowdstream_app_id, $userId, $username, $email) . "
 <script type='text/javascript'>$code</script>
-
 <!-- /WooCommerce Crowdstream Integration -->
 
 ";
@@ -307,7 +309,7 @@ EOF;
 		$parameters['id']    = "'" . esc_js( $product->get_sku() ? __( 'SKU:', 'woocommerce-crowdstream' ) . ' ' . $product->get_sku() : "#" . $product->id ) . "'";
 		$parameters['sku']   = "'" . esc_js( $product->get_sku() ? __( 'SKU:', 'woocommerce-crowdstream' ) . ' ' . $product->get_sku() : "#" . $product->id ) . "'";
 		$parameters['item']  = "'" . esc_js( $product->get_title() ) . "'";
-		$parameters['variant'] = "cs_variation_current";
+		// $parameters['variant'] = "cs_variation_current.variation_id";
 
 		$this->cart_event_tracking_code( $parameters, '.single_add_to_cart_button' );
 	}
@@ -348,15 +350,15 @@ EOF;
 
 		$track_event = "crowdstream.events.cart(%s);";
 
-		$js = array();
+		// $js = array();
 
-		foreach($parameters as $name => $value) {
-			$js[] = "'" . $name . "': " . $value;
-		}
+		// foreach($parameters as $name => $value) {
+		// 	$js[] = "'" . $name . "': " . $value;
+		// }
 
 		wc_enqueue_js( "
 	$( '" . $selector . "' ).click( function() {
-		" . sprintf( $track_event, "{" . join(', ', $js) . "}" ) . "
+		" . sprintf( $track_event, json_encode($parameters) ) . "
 	});
 " );
 	}
