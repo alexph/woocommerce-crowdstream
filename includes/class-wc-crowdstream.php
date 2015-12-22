@@ -106,33 +106,7 @@ class WC_Crowdstream extends WC_Integration {
 
 		return <<<EOF
 
-    (function() {
-        var crowdstream = window.crowdstream = window.crowdstream || {};
-
-        if(typeof crowdstream.load == 'function') return;
-
-        crowdstream.load = function(key) {
-            var script = document.createElement('script');
-            script.type = 'text/javascript';
-            script.async = true;
-            script.src = ('https:' === document.location.protocol
-                    ? 'https://' : 'http://')
-                    + 's3.eu-central-1.amazonaws.com/crowdstream/crowdstream.js';
-            var first = document.getElementsByTagName('script')[0];
-            first.parentNode.insertBefore(script, first);
-
-            crowdstream.ready = function() {
-                crowdstream.appId(key);
-                crowdstream.events.page();
-                $identityCode
-
-                $ecommerceCode
-            }
-        };
-
-        crowdstream.load('$appId');
-    })();
-
+!function(){var t=window.crowdstream=window.crowdstream||{};if("function"!=typeof t.load){t._preload=[],t.events={};for(var e=["page","track","custom","identify","logout","cart","checkout","addItems","addItem"];e.length;){var o=e.shift();t.events[o]=function(e){return function(){t._preload.push([e,arguments])}}(o)}t.load=function(e){var o=document.createElement("script");o.type="text/javascript",o.async=!0,o.src=("https:"===document.location.protocol?"https://":"http://")+"s3.eu-central-1.amazonaws.com/crowdstream/crowdstream.js";var a=document.getElementsByTagName("script")[0];a.parentNode.insertBefore(o,a),t.ready=function(){t.appId(e)}},t.load('$appId')}}();
 
 EOF;
 	}
