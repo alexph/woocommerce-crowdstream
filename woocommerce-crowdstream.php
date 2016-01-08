@@ -1,11 +1,11 @@
 <?php
 /**
- * Plugin Name: WooCommerce Crowdstream Integration
+ * Plugin Name: Crowdstream for WooCommerce
  * Plugin URI: http://wordpress.org/plugins/woocommerce-crowdstream/
  * Description: Allows Crowdstream.io tracking code to be inserted into WooCommerce store pages.
- * Author: Alex Penman-Hayes
- * Author URI: http://alexphayes.co.uk
- * Version: 0.0.1
+ * Author: Crowdstream
+ * Author URI: https://www.crowdstream.io
+ * Version: 1.0.0
  * License: GPLv2 or later
  * Text Domain: woocommerce-crowdstream
  * Domain Path: languages/
