@@ -12,6 +12,11 @@ if ( ! defined( 'ABSPATH' ) ) {
  * @extends WC_Integration
  */
 class WC_Crowdstream extends WC_Integration {
+	private $event_queue          = array();
+	private $item_tracked         = false;
+	private $identify_data        = false;
+	private $woo                  = false;
+	private $has_events_in_cookie = false;
 
 	/**
 	 * Init and hook in the integration.
@@ -19,6 +24,9 @@ class WC_Crowdstream extends WC_Integration {
 	 * @return void
 	 */
 	public function __construct() {
+		global $woocommerce;
+		$this->woo = function_exists('WC') ? WC() : $woocommerce;
+
 		$this->id                 = 'crowdstream_io';
 		$this->method_title       = __('Crowdstream', 'woocommerce-crowdstream');
 		$this->method_description = __('Crowdstream.io is a customer insights and analytics platform.',
@@ -36,15 +44,12 @@ class WC_Crowdstream extends WC_Integration {
 			$this->crowdstream_tracking_enabled = false;
 		}
 
+		define('CROWDSTREAM_PLUGIN_PATH', dirname(__FILE__));
+
 		add_action('woocommerce_update_options_integration_crowdstream_io', array(
 			$this, 'process_admin_options'));
 
-		// Tracking code
-		add_action('wp_head', array($this, 'invoke_tracking'));
-
-		// Event tracking codes
-		add_action('woocommerce_after_add_to_cart_button', array($this, 'queue_cart_buttons'));
-		add_action('wp_footer', array($this, 'post_add_to_cart'));
+		add_action('woocommerce_init', array($this, 'on_woocommerce_init'));
 	}
 
 	/**
@@ -66,236 +71,295 @@ class WC_Crowdstream extends WC_Integration {
 				'type' 				=> 'checkbox',
 				'checkboxgroup'		=> 'start',
 				'default' 			=> get_option(
-					'woocommerce_crowdstream_tracking_enabled') ? 
+					'woocommerce_crowdstream_tracking_enabled') ?
 						get_option( 'woocommerce_crowdstream_tracking_enabled' ) : 'no'
 			),
 		);
 	}
 
-	/**
-	 * Display the tracking codes
-	 *
-	 * @return string
-	 */
-	public function invoke_tracking() {
-		if($this->crowdstream_tracking_enabled) {
-			echo $this->get_crowdstream_tracking_code($this->crowdstream_app_id);
+	public function on_woocommerce_init() {
+		$this->init_hooks();
+		$this->process_queue();
+		$this->setup_identity_data();
+	}
+
+	public function init_hooks() {
+		add_filter('wp_head', array($this, 'render_snippet'));
+		add_filter('wp_head', array($this, 'setup_tracking'));
+
+		add_action('woocommerce_add_to_cart', array($this, 'add_to_cart'), 10, 6);
+		add_action('woocommerce_before_cart_item_quantity_zero', array($this, 'remove_from_cart'), 10);
+		add_filter('woocommerce_applied_coupon', array($this, 'applied_coupon'), 10);
+		add_action('woocommerce_checkout_order_processed', array($this, 'action_order_event'), 10);
+
+		add_action('wp_ajax_crowdstream_clear', array($this, 'clear_queue'));
+	}
+
+	public function render_snippet() {
+		include_once(CROWDSTREAM_PLUGIN_PATH . '/views/snippet.php');
+	}
+
+	public function render_identify() {
+		include_once(CROWDSTREAM_PLUGIN_PATH . '/views/identify.php');
+	}
+
+	public function render_events() {
+		include_once(CROWDSTREAM_PLUGIN_PATH . '/views/js.php');
+	}
+
+	public function setup_tracking() {
+		$this->track_event('page');
+		if(class_exists('WooCommerce')) {
+			if(is_product()) {
+				$product = get_product(get_queried_object_id());
+				$this->track_event('custom', 'Viewed Product', array(
+					array('item' => $this->get_product($product))));
+			}
+
+			if(is_product_category()) {
+				$this->track_event('custom', 'Viewed Product Category', array(
+					array($this->get_category(get_queried_object()))));
+			}
+
+			if(is_cart()) {
+				$product = get_product(get_queried_object_id());
+				$this->track_event('custom', 'Viewed Cart', array(
+					array('item' => $this->get_product($product))));
+			}
+
+			if(is_order_received_page()) {
+				$this->track_event('custom', 'Checkout Complete');
+			}
+
+			if(function_exists('is_checkout_pay_page') && is_checkout_pay_page()) {
+				$product = get_product(get_queried_object_id());
+				$this->track_event('custom', 'Viewed Checkout');
+			}
+
+			if(count($this->event_queue) > 0) $this->render_events();
+			if($this->identify_data !== false) $this->render_identify();
 		}
 	}
 
-	protected function get_tracking_template($appId, $userId, $username, $email) {
-		global $wp;
-		$identityCode = '';
-		$ecommerceCode = '';
+	public function track_event($method, $event = false, $params = array()) {
+		array_push($this->event_queue, $this->prepare_event($method, $event, $params));
+	}
 
-		if($userId) {
-			$identityCode = 'crowdstream.events.identify("' . $userId . '", {
-				username: "' . $username . '", email: "' . $email . '"});';
-		}
+	public function defer_event($method, $event, $params = array()) {
+		$this->put_in_queue($this->prepare_event($method, $event, $params));
+	}
 
-		if(is_order_received_page()) {
-			$orderId = isset($wp->query_vars['order-received']) ? $wp->query_vars['order-received'] : 0;
+	public function prepare_event($method, $event = false, $params = array()) {
+		return array(
+			'method' => $method,
+			'event'  => $event,
+			'params' => $params
+		);
+	}
 
-			if (0 < $orderId && 1 != get_post_meta($orderId, '_crowdstream_tracked', true)) {
-				$ecommerceCode = $this->get_ecommerce_tracking_code($orderId);
+	public function setup_identity_data() {
+		if(is_user_logged_in()) {
+			$userId = get_current_user_id();
+			$user   = wp_get_current_user();
+
+			$this->identify_data = array(
+				'id' => $userId,
+				'params' => array(
+					'name'     => $user->display_name,
+					'username' => $user->user_login,
+					'email'    => $user->user_email
+				)
+			);
+
+			if($user->user_firstname != '' && $user->user_lastname){
+				$this->identify_data['params']['first_name'] = $user->user_firstname;
+				$this->identify_data['params']['last_name']  = $user->user_lastname;
 			}
 		}
-
-		return <<<EOF
-!function(){var t=window.crowdstream=window.crowdstream||{};if("function"!=typeof t.load){t._preload=[],t.events={};for(var e=["page","track","custom","identify","logout","cart","checkout","addItems","addItem"];e.length;){var o=e.shift();t.events[o]=function(e){return function(){t._preload.push([e,arguments])}}(o)}t.load=function(e){var o=document.createElement("script");o.type="text/javascript",o.async=!0,o.src=("https:"===document.location.protocol?"https://":"http://")+"s3.eu-central-1.amazonaws.com/crowdstream/crowdstream.js";var a=document.getElementsByTagName("script")[0];a.parentNode.insertBefore(o,a),t.ready=function(){t.appId(e)}},t.load('$appId')}}();
-crowdstream.events.page();
-$identityCode
-$ecommerceCode
-EOF;
 	}
 
-	/**
-	 * Crowdstream standard tracking
-	 *
-	 * @return string
-	 */
-	protected function get_crowdstream_tracking_code() {
-		if(is_user_logged_in()) {
-			$userId      = get_current_user_id();
-			$currentUser = get_user_by('id', $userId);
-			$username    = $currentUser->user_login;
-			$email       = $currentUser->user_email;
-		} else {
-			$userId   = false;
-			$username = false;
-			$email    = false;
+	public function action_order_event($order_id) {
+		$order = new WC_Order($order_id);
+
+		if($this->identify_data === false) {
+			$this->identify_data = array(
+				'id'		=> get_post_meta($order_id, '_billing_email', true),
+				'params'	=> array(
+					'email' 		=> get_post_meta($order_id, '_billing_email', true),
+					'first_name' 	=> get_post_meta($order_id, '_billing_first_name', true),
+					'last_name' 	=> get_post_meta($order_id, '_billing_last_name', true),
+					'name'			=> get_post_meta($order_id, '_billing_first_name', true)
+									   . ' ' . get_post_meta($order_id, '_billing_last_name', true),
+					)
+				);
 		}
-
-		$code = $this->get_tracking_template($this->crowdstream_app_id, $userId, $username, $email);
-
-		return "
-<!-- WooCommerce Crowdstream Integration -->
-<script type='text/javascript'>$code</script>
-<!-- /WooCommerce Crowdstream Integration -->
-
-";
-
-	}
-
-	/**
-	 * Crowdstream eCommerce tracking
-	 *
-	 * @param int $order_id
-	 *
-	 * @return string
-	 */
-	protected function get_ecommerce_tracking_code( $order_id ) {
-		// Get the order and output tracking code
-		$order = new WC_Order( $order_id );
-
-		// $logged_in = is_user_logged_in() ? 'yes' : 'no';
 
 		$lines = array();
 		$items = array();
 		$quantity = 0;
 
 		// Order items
-		if ( $order->get_items() ) {
-			foreach ( $order->get_items() as $item ) {
-				$_product = $order->get_product_from_item( $item );
+		if ($order->get_items()) {
+			foreach ($order->get_items() as $item) {
+				$_product = $order->get_product_from_item($item);
 
-				$data = array(
-					'order_id' => esc_js( $order->get_order_number() ),
-					'item' => esc_js( $item['name'] ),
-					'id' => esc_js( $_product->get_sku() ? $_product->get_sku() : $_product->id ),
-					'sku' => esc_js( $_product->get_sku() ? $_product->get_sku() : $_product->id ),
-					'variant' => esc_js( woocommerce_get_formatted_variation( $_product->variation_data, true ) ),
-					'amount' => esc_js( $order->get_item_total( $item ) ),
-					'quantity' => esc_js( $item['qty'] ),
-					'currency' => esc_js( get_woocommerce_currency() )
-				);
+				$data = array_merge(array(
+					'order_id' => $order->get_order_number(),
+					'quantity' => $item['qty'],
+					'currency' => get_woocommerce_currency()
+				), $this->get_product($_product, $item['variation_id']));
 
 				$quantity += $item['qty'];
-
-				$out = array();
-				$categories = get_the_terms($_product->id, 'product_cat');
-				if ( $categories ) {
-					foreach ( $categories as $category ) {
-						$out[] = $category->name;
-					}
-				}
-
-				// $data['category'] = esc_js( join( "/", $out) );
 
 				$items[] = $data;
 			}
 		}
 
-		if($items) {
-			$lines[] = 'crowdstream.events.addItems(';
-			$lines[] = json_encode($items);
-			$lines[] = ');';
+		$checkout = array(
+			'order_id' => $order->get_order_number(),
+			'items'    => $quantity,
+			'total'    => $order->get_total(),
+			'shipping' => method_exists($order, 'get_total_shipping') ?
+				$order->get_total_shipping() : $order->get_shipping(),
+			'currency' => get_woocommerce_currency(),
+			'channel'  => 'online'
+		);
+
+		$this->defer_event('addItems', false, array($items));
+		$this->defer_event('checkout', false, array($checkout));
+	}
+
+	public function get_product($product, $variation_id = false, $variation = false) {
+		$data = array(
+			'item'     => $product->get_title(),
+			'id'       => $product->id,
+			'sku'      => $product->get_sku(),
+			'amount'   => $product->get_price(),
+			'variant'  => null,
+		);
+		if($variation_id) {
+			$variant         = $this->get_variation($variation_id, $variation);
+			$data['variant'] = '#' . $variant['variation_id'] . ' ' . $variant['name'];
+			$data['amount']  = $variant['price'];
 		}
-		 
-		$orderNum = esc_js( $order->get_order_number());
-		$affiliation = esc_js( get_bloginfo( 'name' ) );
-		$revenue = esc_js( $order->get_total() );
-		$shipping = esc_js( $order->get_total_shipping() );
-		$tax = esc_js( $order->get_total_tax() );
-		$currency = esc_js( $order->get_order_currency() );
-		
-		$lines[] = <<<EOF
-	crowdstream.events.checkout({
-		'order_id': '$orderNum',
-		'total': '$revenue', 
-		'shipping': '$shipping',
-		'currency': '$currency',
-		'items': '$quantity'
-	});
-EOF;
-
-        update_post_meta( $orderNum, '_crowdstream_tracked', 1 );
-
-		return join("\n", $lines);
+		return $data;
 	}
 
-	/**
-	 * Crowdstream event tracking for single product add to cart
-	 *
-	 * @return void
-	 */
-	public function post_add_to_cart() {
-		if(!$this->crowdstream_tracking_enabled) {
-			return;
+	public function get_category($category){
+		$category_hash = array(
+			'id'	=>	$category->term_id,
+			'name'	=> 	$category->name
+		);
+		return $category_hash;
+	}
+
+	public function get_variation($variation_id, $variation = false){
+		// prepare variation data array
+		$variation_data = array('id' => $variation_id, 'name' => '', 'price' => '');
+		// prepare variation name if $variation is provided as argument
+		if($variation){
+			$variation_attribute_count = 0;
+			foreach($variation as $attr => $value){
+				$variation_data['name'] = $variation_data['name'] . ($variation_attribute_count == 0 ? '' : ', ') . $value;
+				$variation_attribute_count++;
+			}
 		}
-
-		global $product;
-
-		$id = $product->get_sku() ? 
-			__('SKU:', 'woocommerce-crowdstream') . ' ' . $product->get_sku() : "#" . $product->id;
-		$sku = $product->get_sku() ? 
-			__('SKU:', 'woocommerce-crowdstream') . ' ' . $product->get_sku() : "#" . $product->id;
-
-		$parameters = array();
-		$parameters['id']    = "'" . esc_js($id) . "'";
-		$parameters['sku']   = "'" . esc_js($sku) . "'";
-		$parameters['item']  = "'" . esc_js($product->get_title()) . "'";
-		// $parameters['variant'] = "cs_variation_current.variation_id";
-
-		$this->cart_event_tracking_code($parameters, '.single_add_to_cart_button');
+		// get variation price from object
+		$variation_obj = new WC_Product_Variation($variation_id);
+		$variation_data['price'] = $variation_obj->price;
+		// return
+		return $variation_data;
 	}
 
-
-	/**
-	 * Crowdstream event tracking for loop add to cart
-	 *
-	 * @return void
-	 */
-	public function queue_cart_buttons() {
-		if(!$this->crowdstream_tracking_enabled) {
-			return;
+	public function add_to_cart($cart_item_key, $product_id, $quantity, $variation_id = false, $variation = false, $cart_item_data = false){
+		$product = get_product($product_id);
+		if(defined('DOING_AJAX') && DOING_AJAX) {
+			$this->defer_event('custom', 'Product Added', array(
+				array('item' => $this->get_product($product, $variation_id, $variation))
+			));
+		} else {
+			$this->track_event('custom', 'Product Added', array(
+				array('item' => $this->get_product($product, $variation_id, $variation))
+			));
 		}
-
-		$parameters = array();
-		$parameters['id']   = "($(this).data('product_sku')) ? ('SKU: ' + $(this).data('product_sku')) : ($(this).data('product_id'))"; // Product SKU or ID
-		$parameters['sku']  = "($(this).data('product_sku')) ? ($(this).data('product_sku')) : ('#' + $(this).data('product_id'))"; // Product SKU or ID
-		$parameters['item'] = "$('[itemprop=name]').text()";
-
-		$this->cart_event_tracking_code($parameters, '.add_to_cart_button:not(.product_type_variable, .product_type_grouped)');
 	}
 
-	/**
-	 * Crowdstream event tracking for loop add to cart
-	 *
-	 * @param array $parameters associative array of _trackEvent parameters
-	 * @param string $selector jQuery selector for binding click event
-	 *
-	 * @return void
-	 */
-	private function cart_event_tracking_code( $parameters, $selector ) {
-		$parameters = apply_filters( 'woocommerce_crowdstream_event_tracking_parameters', $parameters );
-
-		$track_event = "crowdstream.events.cart(%s);";
-
-		wc_enqueue_js("
-	$('" . $selector . "').click( function() {
-		" . sprintf($track_event, json_encode($parameters)) . "
-	});
-");
+	public function remove_from_cart($key_id){
+		if(!is_object($this->woo->cart)){
+			return true;
+		}
+		$cart_items = $this->woo->cart->get_cart();
+		$removed_cart_item = isset($cart_items[$key_id]) ? $cart_items[$key_id] : false;
+		if($removed_cart_item){
+			$product = get_product($removed_cart_item['product_id']);
+			$variation_id = false;
+			if(!empty($removed_cart_item['variation_id'])){
+				$variation_id = $removed_cart_item['variation_id'];
+			}
+			if(defined('DOING_AJAX') && DOING_AJAX) {
+				$this->defer_event('custom', 'Product Removed', array(
+					array('item' => $this->get_product($product, $variation_id))
+				));
+			} else {
+				$this->track_event('custom', 'Product Removed', array(
+					array('item' => $this->get_product($product, $variation_id))
+				));
+			}
+		}
 	}
 
-	/**
-	 * Crowdstream event tracking for loop add to cart
-	 *
-	 * @param array $parameters associative array of _trackEvent parameters
-	 * @param string $selector jQuery selector for binding click event
-	 *
-	 * @return void
-	 */
-	private function generic_event_tracking_code( $parameters, $selector ) {
-		$parameters = apply_filters('woocommerce_crowdstream_event_tracking_parameters', $parameters);
+	public function applied_coupon($code) {
+		$this->track_event('custom', 'Applied Coupon', array(array('coupon' => $code)));
+	}
 
-		$track_event = "crowdstream.events.track(%s, %s, %s);";
+	public function session_get($k){
+		if(!is_object($this->woo->session)){
+			return isset($_COOKIE[$k]) ? $_COOKIE[$k] : false;
+		}
+		return $this->woo->session->get($k);
+	}
 
-		wc_enqueue_js( "
-	$('" . $selector . "').click( function() {
-		" . sprintf($track_event, $parameters['category'], $parameters['action'], $parameters['label']) . "
-	});
-" );
+	public function session_set($k, $v){
+		if(!is_object($this->woo->session)){
+			setcookie($k, $v, time() + 43200, COOKIEPATH, COOKIE_DOMAIN);
+			$_COOKIE[$k] = $v;
+			return true;
+		}
+		return $this->woo->session->set($k, $v);
+	}
+
+	public function put_in_queue($data) {
+		$items = $this->get_queue();
+		if(empty($items)) $items = array();
+		array_push($items, $data);
+		$encoded_items = json_encode($items, true);
+		$this->session_set($this->get_cookie_name(), $encoded_items);
+	}
+
+	public function get_queue() {
+		$items = array();
+		$data = $this->session_get($this->get_cookie_name());
+		if(!empty($data)) $items = json_decode(stripslashes($data), true);
+		return $items;
+	}
+
+	public function clear_queue() {
+		$this->session_set($this->get_cookie_name(), json_encode(array(), true));
+	}
+
+	private function get_cookie_name() {
+		return 'csqueue_' . COOKIEHASH;
+	}
+
+	private function process_queue() {
+		if(!(defined('DOING_AJAX') && DOING_AJAX)) {
+			$items = $this->get_queue();
+			if(count($items) > 0) {
+				$this->has_events_in_cookie = true;
+				foreach($items as $item) {
+					array_push($this->event_queue, $item);
+				}
+			}
+		}
 	}
 }

@@ -1,0 +1,3 @@
+<script>
+!function(){var a=window.crowdstream=window.crowdstream||{};if("function"!=typeof a.load){a._preload=[],a.events={};for(var b=["page","track","custom","identify","logout","cart","checkout","addItems","addItem","prospect","form","on"];b.length;){var c=b.shift();a.events[c]=function(b){return function(){a._preload.push([b,arguments])}}(c)}a.load=function(b){var c=document.createElement("script");c.type="text/javascript",c.async=!0,c.src=("https:"===document.location.protocol?"https://":"http://")+"s3.eu-central-1.amazonaws.com/crowdstream/crowdstream.js";var d=document.getElementsByTagName("script")[0];d.parentNode.insertBefore(c,d),a.ready=function(){a.appId(b)}},a.load("<?php echo $this->crowdstream_app_id; ?>")}}();
+</script>

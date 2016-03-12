@@ -11,6 +11,9 @@
  * Domain Path: languages/
  */
 
+// ini_set('error_reporting', 1);
+// error_reporting(E_ALL);
+
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
@@ -27,7 +30,7 @@ class WC_Crowdstream_Integration {
 	 *
 	 * @var string
 	 */
-	const VERSION = '0.0.1';
+	const VERSION = '1.0.0';
 
 	/**
 	 * Instance of this class.
