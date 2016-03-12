@@ -13,6 +13,8 @@ Provides integration between Crowdstream and WooCommerce.
 
 This plugin provides the integration between Crowdstream.io and the WooCommerce plugin.
 
+Crowdstream is a service for Customer Analytics that helps you send email for abandoned cart recovery etc.
+
 Contributions are welcome via the [GitHub repository](https://github.com/alexph/woocommerce-crowdstream).
 
 == Installation ==
