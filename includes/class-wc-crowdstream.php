@@ -78,9 +78,11 @@ class WC_Crowdstream extends WC_Integration {
 	}
 
 	public function on_woocommerce_init() {
-		$this->init_hooks();
-		$this->process_queue();
-		$this->setup_identity_data();
+		if($this->crowdstream_tracking_enabled) {
+			$this->init_hooks();
+			$this->process_queue();
+			$this->setup_identity_data();
+		}
 	}
 
 	public function init_hooks() {
@@ -91,6 +93,7 @@ class WC_Crowdstream extends WC_Integration {
 		add_action('woocommerce_before_cart_item_quantity_zero', array($this, 'remove_from_cart'), 10);
 		add_filter('woocommerce_applied_coupon', array($this, 'applied_coupon'), 10);
 		add_action('woocommerce_checkout_order_processed', array($this, 'action_order_event'), 10);
+		add_action('woocommerce_checkout_update_order_review', array($this, 'action_update_order_review'), 10);
 
 		add_action('wp_ajax_crowdstream_clear', array($this, 'clear_queue'));
 	}
@@ -307,6 +310,29 @@ class WC_Crowdstream extends WC_Integration {
 			}
 		}
 	}
+
+	// public function action_update_order_review($postdata) {
+	// 	$data = array();
+	// 	parse_str($postdata, $data);
+	// 	$identify_data = array();
+	// 	if(array_key_exists('billing_first_name', $data)) {
+	// 		$identify_data['first_name'] = $data['billing_first_name'];
+	// 	}
+	// 	if(array_key_exists('billing_last_name', $data)) {
+	// 		$identify_data['billing_last_name'] = $data['billing_last_name'];
+	// 	}
+	// 	if(array_key_exists('billing_email', $data)) {
+	// 		$identify_data['billing_email'] = $data['billing_email'];
+	// 	}
+	//
+	// 	if($identify_data) {
+	// 		if($this->identify_data !== false) {
+	// 			$this->identify_data['params'] = array_merge($this->identify_data['params'], $identify_data);
+	// 		} else {
+	// 			$this->identify_data = $identify_data;
+	// 		}
+	// 	}
+	// }
 
 	public function applied_coupon($code) {
 		$this->track_event('custom', 'Applied Coupon', array(array('coupon' => $code)));

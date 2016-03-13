@@ -3,7 +3,7 @@ Contributors: alexph
 Tags: woocommerce, crowdstream, analytics
 Requires at least: 3.8
 Tested up to: 4.4.3
-Stable tag: 1.0.0
+Stable tag: 1.0.1
 License: GPLv3
 License URI: http://www.gnu.org/licenses/gpl-3.0.html
 
@@ -14,6 +14,8 @@ Provides integration between Crowdstream and WooCommerce.
 This plugin provides the integration between Crowdstream.io and the WooCommerce plugin.
 
 Crowdstream is a service for Customer Analytics that helps you send email for abandoned cart recovery etc.
+
+To use this service you will need to sign up for an account at https://www.crowdstream.io.
 
 Contributions are welcome via the [GitHub repository](https://github.com/alexph/woocommerce-crowdstream).
 
